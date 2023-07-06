@@ -9,6 +9,8 @@ DWORD WINAPI ThreadFunction(LPVOID pParam)
 	int nReceive = 0;
 
 	// 4-2. receive string from client
+	// If no error occurs, recv returns the number of bytes received and 
+	// the buffer pointed to by the buf parameter will contain this data received. MSN
 	while ((nReceive = ::recv(hClient, szBuffer, sizeof(szBuffer), 0)) > 0)
 	{
 		// 4-3. send the received string back to client 

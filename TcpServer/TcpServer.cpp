@@ -2,6 +2,32 @@
 #include <winsock2.h>
 #pragma comment(lib, "ws2_32")
 
+DWORD WINAPI ThreadFunction(LPVOID pParam)
+{
+	SOCKET hClient = (SOCKET)pParam; // communication socket
+	char szBuffer[128] = { 0 }; // buffer size maximum 128 bytes
+	int nReceive = 0;
+
+	// 4-2. receive string from client
+	while ((nReceive = ::recv(hClient, szBuffer, sizeof(szBuffer), 0)) > 0)
+	{
+		// 4-3. send the received string back to client 
+		::send(hClient, szBuffer, sizeof(szBuffer), 0);
+		//puts(szBuffer);
+		//fflush(stdout);
+		printf("From client: %s\n", szBuffer);
+		memset(szBuffer, 0, sizeof(szBuffer)); // clear buffer
+	}
+
+	// 4-4. receive disconnection request from client
+	::shutdown(hClient, SD_BOTH); 
+	::closesocket(hClient); 
+	puts("Client disconnected."); 
+	fflush(stdout); 
+
+	return 0;
+}
+
 int _tmain(int argc, _TCHAR* argv[]) 
 {
 	// 0. initialize winsock
@@ -58,30 +84,24 @@ int _tmain(int argc, _TCHAR* argv[])
 	SOCKADDR_IN clientAddr = { 0 }; // client address
 	int nAddrLen = sizeof(clientAddr);
 	SOCKET hClient = 0; // communication socket
-	char szBuffer[128] = { 0 }; // buffer size maximum 128 bytes
-	int nReceive = 0;
+	DWORD dwThreadID = 0;
+	HANDLE hThread;
 
 	// 4-1. accept client connection and open communication socket 
 	while ((hClient = ::accept(hSocket, (SOCKADDR*)&clientAddr, &nAddrLen)) != INVALID_SOCKET)
 	{
 		puts("New client has been connected.");
 		fflush(stdout);
-		// 4-2. receive string from client
-		while ((nReceive = ::recv(hClient, szBuffer, sizeof(szBuffer), 0)) > 0)
-		{
-			// 4-3. send the received string back to client 
-			::send(hClient, szBuffer, sizeof(szBuffer), 0);
-			//puts(szBuffer); 
-			//fflush(stdout);
-			printf("From client: %s\n", szBuffer);
-			memset(szBuffer, 0, sizeof(szBuffer)); // clear buffer
-		}
 
-		// 4-4. receive disconnection request from client
-		::shutdown(hClient, SD_BOTH);
-		::closesocket(hClient);
-		puts("Client disconnected."); 
-		fflush(stdout);
+		hThread = ::CreateThread(
+			NULL, // inherit security authority
+			0, // defualt stack size
+			ThreadFunction, // your thread function 
+			(LPVOID)hClient, // thread function parameter
+			0, // default flag
+			&dwThreadID); // thread ID storing address
+
+		::CloseHandle(hThread);
 	}
 
 	// 5. close listening socket

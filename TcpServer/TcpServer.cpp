@@ -14,9 +14,7 @@ DWORD WINAPI ThreadFunction(LPVOID pParam)
 	while ((nReceive = ::recv(hClient, szBuffer, sizeof(szBuffer), 0)) > 0)
 	{
 		// 4-3. send the received string back to client 
-		::send(hClient, szBuffer, sizeof(szBuffer), 0);
-		//puts(szBuffer);
-		//fflush(stdout);
+		::send(hClient, szBuffer, sizeof(szBuffer), 0); // broadcast message == chatting server
 		printf("From client: %s\n", szBuffer);
 		memset(szBuffer, 0, sizeof(szBuffer)); // clear buffer
 	}

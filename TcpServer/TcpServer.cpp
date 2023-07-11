@@ -10,6 +10,10 @@ typedef struct CLIENTHEALTH
 	int clientId;
 	uint64_t lastPing;
 	uint64_t lastPong;
+
+	bool operator==(const CLIENTHEALTH& other) const {
+		return clientId == other.clientId;
+	}
 } CLIENTHEALTH;
 
 CRITICAL_SECTION g_cs; // critical section for thread synchronization
@@ -171,9 +175,8 @@ DWORD WINAPI ThreadFunction(LPVOID pParam)
 	g_clientList.remove(hClient);
 
 	// ::TODO
-	//CLIENTHEALTH* removeHealth = findByClientId((int)hClient); 
-	//CLIENTHEALTH remove = *removeHealth;
-	//g_clientHealthList.remove(remove);
+	CLIENTHEALTH* removeHealth = findByClientId((int)hClient); \
+	g_clientHealthList.remove(*removeHealth);
 
 	::LeaveCriticalSection(&g_cs);
 
@@ -200,7 +203,8 @@ DWORD WINAPI hbThreadFunction(LPVOID pParam)
 				{
 					g_clientRemoveList.push_back(*it);
 				}
-				printf("ping: %u, pong: %u, differ: %u\n", clientHealth->lastPing, clientHealth->lastPong, clientHealth->lastPing - clientHealth->lastPong);
+				printf("ping: %u, pong: %u, differ: %u\n", 
+					clientHealth->lastPing, clientHealth->lastPong, clientHealth->lastPing - clientHealth->lastPong);
 				::send(*it, "ping", 5, 0);
 				// record ping time
 				setPing(*it, timeSinceEpochMillisec());

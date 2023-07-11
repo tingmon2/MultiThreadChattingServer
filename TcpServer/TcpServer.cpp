@@ -19,8 +19,8 @@ typedef struct CLIENTHEALTH
 CRITICAL_SECTION g_cs; // critical section for thread synchronization
 SOCKET g_hSocket; // listening socket
 std::list<SOCKET> g_clientList; // linked list of client sockets
-std::list<CLIENTHEALTH> g_clientHealthList;
-std::list<SOCKET> g_clientRemoveList;
+std::list<CLIENTHEALTH> g_clientHealthList; // store health check information
+std::list<SOCKET> g_clientRemoveList; // list of timeout clients
 
 uint64_t timeSinceEpochMillisec() {
 	using namespace std::chrono;
@@ -43,13 +43,14 @@ CLIENTHEALTH* WINAPI findByClientId(int clientId)
 	return &(*g_clientHealthList.begin());
 }
 
+// kind of dummy node in linked list which only indicates the start of list
 DWORD WINAPI createDummyHealth()
 {
-	CLIENTHEALTH* newHealth = (CLIENTHEALTH*)malloc(sizeof(CLIENTHEALTH));
-	newHealth->clientId = 0;
-	newHealth->lastPing = 0;
-	newHealth->lastPong = 0;
-	g_clientHealthList.push_back(*newHealth);
+	CLIENTHEALTH newHealth = *(CLIENTHEALTH*)malloc(sizeof(CLIENTHEALTH)); // memory initialize
+	newHealth.clientId = 0;
+	newHealth.lastPing = 0;
+	newHealth.lastPong = 0;
+	g_clientHealthList.push_back(newHealth);
 	return 0;
 }
 
@@ -174,8 +175,7 @@ DWORD WINAPI ThreadFunction(LPVOID pParam)
 	::EnterCriticalSection(&g_cs);
 	g_clientList.remove(hClient);
 
-	// ::TODO
-	CLIENTHEALTH* removeHealth = findByClientId((int)hClient); \
+	CLIENTHEALTH* removeHealth = findByClientId((int)hClient);
 	g_clientHealthList.remove(*removeHealth);
 
 	::LeaveCriticalSection(&g_cs);
@@ -196,12 +196,13 @@ DWORD WINAPI hbThreadFunction(LPVOID pParam)
 			::EnterCriticalSection(&g_cs);
 			for (it = g_clientList.begin(); it != g_clientList.end(); it++)
 			{
-				// before send ping, if ping and pong discrepancy is bigger than 3 min, disconnect.
 				CLIENTHEALTH* clientHealth = findByClientId((int)*it);
+				// before send ping, if ping and pong discrepancy is bigger than 3 min, disconnect.
+				// if pong is bigger than ping, that is normal -> unsigned will return differ as 4294967295 but it means healthy.
 				if (clientHealth->lastPing - clientHealth->lastPong > 30000
-					&& clientHealth->lastPing > clientHealth->lastPong)
+					&& clientHealth->lastPing > clientHealth->lastPong) 
 				{
-					g_clientRemoveList.push_back(*it);
+					g_clientRemoveList.push_back(*it); // health check failed timeout
 				}
 				printf("ping: %u, pong: %u, differ: %u\n", 
 					clientHealth->lastPing, clientHealth->lastPong, clientHealth->lastPing - clientHealth->lastPong);
@@ -211,7 +212,7 @@ DWORD WINAPI hbThreadFunction(LPVOID pParam)
 			}
 			::LeaveCriticalSection(&g_cs);
 		}
-		if (g_clientRemoveList.size() > 0)
+		if (g_clientRemoveList.size() > 0) // disconnect all timeout sockets
 		{
 			std::list<SOCKET>::iterator it;
 			::EnterCriticalSection(&g_cs);
@@ -221,6 +222,8 @@ DWORD WINAPI hbThreadFunction(LPVOID pParam)
 				fflush(stdout);
 
 				g_clientList.remove(*it);
+				CLIENTHEALTH* removeHealth = findByClientId((int)*it);
+				g_clientHealthList.remove(*removeHealth);
 
 				::shutdown(*it, SD_BOTH);
 				::closesocket(*it);

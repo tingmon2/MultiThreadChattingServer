@@ -1,11 +1,73 @@
 #include "stdafx.h"
 #include <winsock2.h>
-#include<list>
+#include <list>
+#include <iostream>
+#include <chrono>
 #pragma comment(lib, "ws2_32")
+
+typedef struct CLIENTHEALTH
+{
+	int clientId;
+	uint64_t lastPing;
+	uint64_t lastPong;
+} CLIENTHEALTH;
 
 CRITICAL_SECTION g_cs; // critical section for thread synchronization
 SOCKET g_hSocket; // listening socket
 std::list<SOCKET> g_clientList; // linked list of client sockets
+std::list<CLIENTHEALTH> g_clientHealthList;
+std::list<SOCKET> g_clientRemoveList;
+
+uint64_t timeSinceEpochMillisec() {
+	using namespace std::chrono;
+	return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
+}
+
+CLIENTHEALTH* WINAPI findByClientId(int clientId)
+{
+	std::list<CLIENTHEALTH>::iterator it;
+	::EnterCriticalSection(&g_cs);
+	for (it = g_clientHealthList.begin(); it != g_clientHealthList.end(); it++)
+	{
+		if (it->clientId == clientId)
+		{
+			::LeaveCriticalSection(&g_cs);
+			return &(*it);
+		}
+	}
+	::LeaveCriticalSection(&g_cs);
+	return &(*g_clientHealthList.begin());
+}
+
+DWORD WINAPI createDummyHealth()
+{
+	CLIENTHEALTH* newHealth = (CLIENTHEALTH*)malloc(sizeof(CLIENTHEALTH));
+	newHealth->clientId = 0;
+	newHealth->lastPing = 0;
+	newHealth->lastPong = 0;
+	g_clientHealthList.push_back(*newHealth);
+	return 0;
+}
+
+DWORD setPing(SOCKET client, uint64_t time)
+{
+	CLIENTHEALTH* health = findByClientId((int)client);
+	if (health->clientId != 0)
+	{
+		health->lastPing = time;
+	}
+	return 0;
+}
+
+DWORD setPong(SOCKET client, uint64_t time)
+{
+	CLIENTHEALTH* health = findByClientId((int)client);
+	if (health->clientId != 0)
+	{
+		health->lastPong = time;
+	}
+	return 0;
+}
 
 BOOL CtrlHandler(DWORD dwType)
 {
@@ -22,6 +84,7 @@ BOOL CtrlHandler(DWORD dwType)
 			::closesocket(*it);
 		}
 		g_clientList.clear(); 
+		g_clientHealthList.clear();
 		::LeaveCriticalSection(&g_cs);
 
 		puts("Disconnect all clients and closing server...");
@@ -38,11 +101,27 @@ BOOL CtrlHandler(DWORD dwType)
 	return FALSE;
 }
 
+BOOL AddHealth(SOCKET hClient)
+{
+	CLIENTHEALTH newHealth = *(CLIENTHEALTH*)malloc(sizeof(CLIENTHEALTH));;
+	newHealth.clientId = (int)hClient;
+	newHealth.lastPing = 0;
+	newHealth.lastPong = 0;
+
+	g_clientHealthList.push_back(newHealth);
+
+	return TRUE;
+}
+
 BOOL AddUser(SOCKET hClient)
 {	// using critical section means giving up synchronism which undermines the reason of multi threading
 	// it could provoke dead lock if server has too many or long critical section. therefore, minimize it.
+
 	::EnterCriticalSection(&g_cs); // critical section start, object(socket list) lock?
+
 	g_clientList.push_back(hClient); // this code will be run by only one thread at a time
+	AddHealth(hClient);
+
 	::LeaveCriticalSection(&g_cs); // critical section end
 
 	return TRUE;
@@ -71,22 +150,82 @@ DWORD WINAPI ThreadFunction(LPVOID pParam)
 	// the buffer pointed to by the buf parameter will contain this data received. MSN
 	while ((nReceive = ::recv(hClient, szBuffer, sizeof(szBuffer), 0)) > 0)
 	{
-		BroadCastChattingMessage(szBuffer); 
-		memset(szBuffer, 0, sizeof(szBuffer)); // clear buffer
+		if (std::string(szBuffer) == "pong")
+		{
+			printf("%s\n", "pong received");
+			// record pong time
+			setPong(hClient, timeSinceEpochMillisec());
+		}
+		else
+		{
+			BroadCastChattingMessage(szBuffer);
+			memset(szBuffer, 0, sizeof(szBuffer)); // clear buffer
+		}
 	}
 
 	// 4-4. receive disconnection request from client
-
-	puts("Client disconnected."); 
-	fflush(stdout); 
+	puts("Client disconnected.");
+	fflush(stdout);
 
 	::EnterCriticalSection(&g_cs);
-	g_clientList.remove(hClient); 
-	::LeaveCriticalSection(&g_cs); 
+	g_clientList.remove(hClient);
+
+	// ::TODO
+	//CLIENTHEALTH* removeHealth = findByClientId((int)hClient); 
+	//CLIENTHEALTH remove = *removeHealth;
+	//g_clientHealthList.remove(remove);
+
+	::LeaveCriticalSection(&g_cs);
 
 	::shutdown(hClient, SD_BOTH);
 	::closesocket(hClient);
 
+	return 0;
+}
+
+DWORD WINAPI hbThreadFunction(LPVOID pParam)
+{
+	while (1)
+	{
+		if (g_clientList.size() > 0)
+		{
+			std::list<SOCKET>::iterator it;
+			::EnterCriticalSection(&g_cs);
+			for (it = g_clientList.begin(); it != g_clientList.end(); it++)
+			{
+				// before send ping, if ping and pong discrepancy is bigger than 3 min, disconnect.
+				CLIENTHEALTH* clientHealth = findByClientId((int)*it);
+				if (clientHealth->lastPing - clientHealth->lastPong > 30000
+					&& clientHealth->lastPing > clientHealth->lastPong)
+				{
+					g_clientRemoveList.push_back(*it);
+				}
+				printf("ping: %u, pong: %u, differ: %u\n", clientHealth->lastPing, clientHealth->lastPong, clientHealth->lastPing - clientHealth->lastPong);
+				::send(*it, "ping", 5, 0);
+				// record ping time
+				setPing(*it, timeSinceEpochMillisec());
+			}
+			::LeaveCriticalSection(&g_cs);
+		}
+		if (g_clientRemoveList.size() > 0)
+		{
+			std::list<SOCKET>::iterator it;
+			::EnterCriticalSection(&g_cs);
+			for (it = g_clientRemoveList.begin(); it != g_clientRemoveList.end(); it++)
+			{
+				puts("Client timeout.");
+				fflush(stdout);
+
+				g_clientList.remove(*it);
+
+				::shutdown(*it, SD_BOTH);
+				::closesocket(*it);
+			}
+			g_clientRemoveList.clear();
+			::LeaveCriticalSection(&g_cs);
+		}
+		Sleep(10000);
+	}
 	return 0;
 }
 
@@ -150,6 +289,19 @@ int _tmain(int argc, _TCHAR* argv[])
 		fflush(stdout);
 	}
 
+	createDummyHealth();
+
+	// send heartbeat for every 1 min
+	DWORD hbThreadID = 0;
+	HANDLE hbThread = ::CreateThread(
+		NULL, // inherit security authority
+		0, // defualt stack size
+		hbThreadFunction, // your thread function 
+		0, // thread function parameter
+		0, // default flag
+		&hbThreadID); // thread ID storing address
+	::CloseHandle(hbThread);
+
 	// 4. client request process and respond
 	SOCKADDR_IN clientAddr = { 0 }; // client address
 	int nAddrLen = sizeof(clientAddr);
@@ -170,6 +322,7 @@ int _tmain(int argc, _TCHAR* argv[])
 		puts("New client has been connected.");
 		fflush(stdout);
 
+		// create thread once new client is accepted
 		hThread = ::CreateThread(
 			NULL, // inherit security authority
 			0, // defualt stack size
@@ -177,7 +330,6 @@ int _tmain(int argc, _TCHAR* argv[])
 			(LPVOID)hClient, // thread function parameter
 			0, // default flag
 			&dwThreadID); // thread ID storing address
-
 		::CloseHandle(hThread);
 	}
 

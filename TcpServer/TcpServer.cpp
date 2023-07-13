@@ -199,7 +199,7 @@ DWORD WINAPI hbThreadFunction(LPVOID pParam)
 				CLIENTHEALTH* clientHealth = findByClientId((int)*it);
 				// before send ping, if ping and pong discrepancy is bigger than 3 min, disconnect.
 				// if pong is bigger than ping, that is normal -> unsigned will return differ as 4294967295 but it means healthy.
-				if (clientHealth->lastPing - clientHealth->lastPong > 30000
+				if (clientHealth->lastPing - clientHealth->lastPong > 60000 * 3
 					&& clientHealth->lastPing > clientHealth->lastPong) 
 				{
 					g_clientRemoveList.push_back(*it); // health check failed timeout
@@ -231,7 +231,7 @@ DWORD WINAPI hbThreadFunction(LPVOID pParam)
 			g_clientRemoveList.clear();
 			::LeaveCriticalSection(&g_cs);
 		}
-		Sleep(10000);
+		Sleep(60000);
 	}
 	return 0;
 }
